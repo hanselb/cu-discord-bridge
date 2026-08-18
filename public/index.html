@@ -42,22 +42,30 @@
     }
 
     window.fbAsyncInit = function() {
-      FB.init({
-        appId: 'YOUR_META_APP_ID',
-        cookie: true,
-        xfbml: true,
-        version: 'v19.0'
-      });
+  // Meta SDK requires HTTPS. Skip SDK init on HTTP to prevent console crashes.
+  if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
+    console.warn("Meta SDK disabled: Must run on HTTPS or localhost.");
+    return;
+  }
 
-      FB.getLoginStatus(function(response) {
-        if (response.status === 'connected') {
-          fetchMetaUserData(response.authResponse.accessToken);
-        } else if (!AppState.nickname) {
-          const app = document.querySelector("discord-app");
-          if (app) app.showLoginModal(true);
-        }
-      });
-    };
+  FB.init({
+    appId: '1234567890123456', // Replace with your real Meta App ID
+    cookie: true,
+    xfbml: true,
+    version: 'v19.0'
+  });
+
+  AppState.fbInitialized = true;
+
+  FB.getLoginStatus(function(response) {
+    if (response.status === 'connected') {
+      fetchMetaUserData(response.authResponse.accessToken);
+    } else if (!AppState.nickname) {
+      const app = document.querySelector("discord-app");
+      if (app) app.showLoginModal(true);
+    }
+  });
+};
 
     function fetchMetaUserData(token) {
       if (token) {
@@ -77,13 +85,22 @@
     }
 
     function loginWithMeta() {
-      FB.login(function(response) {
-        if (response.authResponse) {
-          fetchMetaUserData(response.authResponse.accessToken);
-        }
-      }, { scope: 'public_profile' });
-    }
+  if (window.location.protocol === 'http:' && window.location.hostname !== 'localhost') {
+    alert("Meta Login requires HTTPS. Please serve your frontend over HTTPS (e.g., using ngrok).");
+    return;
+  }
 
+  if (!window.FB || !AppState.fbInitialized) {
+    alert("Meta SDK is still loading or failed to initialize. Ensure you are using HTTPS and a valid App ID.");
+    return;
+  }
+
+  FB.login(function(response) {
+    if (response.authResponse) {
+      fetchMetaUserData(response.authResponse.accessToken);
+    }
+  }, { scope: 'public_profile' });
+}
     class DiscordApp extends HTMLElement {
       connectedCallback() {
         this.render();
@@ -94,7 +111,9 @@
       }
 
       initSocket() {
-        AppState.socket = io({
+
+        const backendUrl = `http://${window.location.hostname}:3042`;
+        AppState.socket = io(backendUrl, {
           transports: ['websocket', 'polling'],
           reconnectionAttempts: 15,
           timeout: 10000

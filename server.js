@@ -5,7 +5,7 @@ import { join } from 'path';
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN || 'YOUR_DISCORD_BOT_TOKEN';
 const CATEGORY_ID = process.env.CATEGORY_ID || 'YOUR_TARGET_CATEGORY_ID';
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 3042;
 
 // ---------- Discord bot (unchanged logic) ----------
 const client = new Client({
@@ -82,7 +82,7 @@ function buildMessagePayload(message) {
   };
 }
 
-client.once('ready', () => {
+client.once('clientReady', () => {
   console.log(`Bot connected as ${client.user.tag}`);
 });
 
