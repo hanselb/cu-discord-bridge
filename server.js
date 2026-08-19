@@ -7,7 +7,7 @@ const DISCORD_TOKEN = process.env.DISCORD_TOKEN || 'YOUR_DISCORD_BOT_TOKEN';
 const CATEGORY_ID = process.env.CATEGORY_ID || 'YOUR_TARGET_CATEGORY_ID';
 const PORT = Number(process.env.PORT) || 3042;
 
-// ---------- Discord bot (unchanged logic) ----------
+// ---------- Discord bot ----------
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -23,7 +23,7 @@ async function getOrCreateWebhook(channel) {
   if (webhookCache.has(channel.id)) return webhookCache.get(channel.id);
 
   const webhooks = await channel.fetchWebhooks();
-  let webhook = webhooks.find(wh => wh.owner?.id === client.user.id);
+  let webhook = webhooks.find(wh => wh.owner?.id === client.user?.id);
 
   if (!webhook) {
     webhook = await channel.createWebhook({
@@ -82,8 +82,8 @@ function buildMessagePayload(message) {
   };
 }
 
-client.once('clientReady', () => {
-  console.log(`Bot connected as ${client.user.tag}`);
+client.once('ready', () => {
+  console.log(`Bot connected as ${client.user?.tag}`);
 });
 
 client.on('channelCreate', (channel) => {
@@ -173,7 +173,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// Login Discord bot
 client.login(DISCORD_TOKEN).catch(err => {
   console.error('Discord login failed:', err);
   process.exit(1);
@@ -184,17 +183,15 @@ const publicDir = join(import.meta.dir, 'public');
 
 export default {
   port: PORT,
-  idleTimeout: 30, // must be > engine pingInterval (default 25s)
+  idleTimeout: 30,
 
   async fetch(req, server) {
     const url = new URL(req.url);
 
-    // Socket.IO traffic
     if (url.pathname.startsWith('/socket.io/')) {
       return engine.handleRequest(req, server);
     }
 
-    // Static files from /public
     const filePath = url.pathname === '/' ? '/index.html' : url.pathname;
     const file = Bun.file(join(publicDir, filePath));
 

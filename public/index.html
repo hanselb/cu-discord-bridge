@@ -19,6 +19,10 @@
   <discord-app class="flex h-full w-full"></discord-app>
 
   <script>
+    // Configuration - Replace with your app IDs
+    const DISCORD_CLIENT_ID = "1539303900559966269";
+    const META_APP_ID = "1235819158671056";
+
     window.AppState = {
       socket: null,
       connected: false,
@@ -27,7 +31,7 @@
       activeChannelId: null,
       nickname: localStorage.getItem("cuban_relay_nick") || "",
       avatarUrl: localStorage.getItem("cuban_relay_avatar") || "",
-      metaToken: localStorage.getItem("cuban_relay_meta_token") || "",
+      authProvider: localStorage.getItem("cuban_relay_provider") || null, // 'discord' | 'meta' | null
       messages: {},
       unreads: {}
     };
@@ -41,43 +45,88 @@
       }
     }
 
-    window.fbAsyncInit = function() {
-  // Meta SDK requires HTTPS. Skip SDK init on HTTP to prevent console crashes.
-  if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
-    console.warn("Meta SDK disabled: Must run on HTTPS or localhost.");
-    return;
-  }
-
-  FB.init({
-    appId: '1234567890123456', // Replace with your real Meta App ID
-    cookie: true,
-    xfbml: true,
-    version: 'v19.0'
-  });
-
-  AppState.fbInitialized = true;
-
-  FB.getLoginStatus(function(response) {
-    if (response.status === 'connected') {
-      fetchMetaUserData(response.authResponse.accessToken);
-    } else if (!AppState.nickname) {
-      const app = document.querySelector("discord-app");
-      if (app) app.showLoginModal(true);
+    // --- Discord OAuth Handling ---
+    function handleDiscordOAuthRedirect() {
+      const hash = new URLSearchParams(window.location.hash.substring(1));
+      const accessToken = hash.get("access_token");
+      if (accessToken) {
+        fetchDiscordUserData(accessToken);
+        history.replaceState(null, "", window.location.pathname);
+      }
     }
-  });
-};
+
+    function loginWithDiscord() {
+      if (!DISCORD_CLIENT_ID || DISCORD_CLIENT_ID === "YOUR_DISCORD_CLIENT_ID") {
+        alert("Please set a valid DISCORD_CLIENT_ID in the script.");
+        return;
+      }
+      const redirectUri = encodeURIComponent(window.location.origin + window.location.pathname);
+      const scope = encodeURIComponent("identify");
+      const discordAuthUrl = `https://discord.com/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&redirect_uri=${redirectUri}&response_type=token&scope=${scope}`;
+      window.location.href = discordAuthUrl;
+    }
+
+    async function fetchDiscordUserData(token) {
+      try {
+        const res = await fetch("https://discord.com/api/v10/users/@me", {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await res.json();
+        if (data.id) {
+          AppState.nickname = data.global_name || data.username;
+          AppState.avatarUrl = data.avatar
+            ? `https://cdn.discordapp.com/avatars/${data.id}/${data.avatar}.png`
+            : `https://cdn.discordapp.com/embed/avatars/${(parseInt(data.id) >> 22) % 5}.png`;
+          AppState.authProvider = "discord";
+
+          localStorage.setItem("cuban_relay_nick", AppState.nickname);
+          localStorage.setItem("cuban_relay_avatar", AppState.avatarUrl);
+          localStorage.setItem("cuban_relay_provider", "discord");
+
+          window.dispatchEvent(new CustomEvent("nickname-updated"));
+          document.querySelector("discord-login-modal")?.remove();
+        }
+      } catch (e) {
+        console.error("Failed to fetch Discord user:", e);
+      }
+    }
+
+    // --- Meta / Instagram SDK Handling ---
+    window.fbAsyncInit = function() {
+      if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
+        console.warn("Meta SDK disabled: Must run on HTTPS or localhost.");
+        return;
+      }
+
+      FB.init({
+        appId: META_APP_ID,
+        cookie: true,
+        xfbml: true,
+        version: 'v19.0'
+      });
+
+      AppState.fbInitialized = true;
+
+      if (AppState.authProvider === 'meta') {
+        FB.getLoginStatus(function(response) {
+          if (response.status === 'connected') {
+            fetchMetaUserData(response.authResponse.accessToken);
+          }
+        });
+      }
+    };
 
     function fetchMetaUserData(token) {
-      if (token) {
-        localStorage.setItem("cuban_relay_meta_token", token);
-        AppState.metaToken = token;
-      }
       FB.api('/me', { fields: 'name,picture.type(large)' }, function(response) {
         if (response && !response.error) {
           AppState.nickname = response.name || '';
           AppState.avatarUrl = response.picture?.data?.url || '';
+          AppState.authProvider = 'meta';
+
           localStorage.setItem("cuban_relay_nick", AppState.nickname);
           localStorage.setItem("cuban_relay_avatar", AppState.avatarUrl);
+          localStorage.setItem("cuban_relay_provider", "meta");
+
           window.dispatchEvent(new CustomEvent("nickname-updated"));
           document.querySelector("discord-login-modal")?.remove();
         }
@@ -85,34 +134,35 @@
     }
 
     function loginWithMeta() {
-  if (window.location.protocol === 'http:' && window.location.hostname !== 'localhost') {
-    alert("Meta Login requires HTTPS. Please serve your frontend over HTTPS (e.g., using ngrok).");
-    return;
-  }
+      if (window.location.protocol === 'http:' && window.location.hostname !== 'localhost') {
+        alert("Meta Login requires HTTPS. Please serve your frontend over HTTPS.");
+        return;
+      }
 
-  if (!window.FB || !AppState.fbInitialized) {
-    alert("Meta SDK is still loading or failed to initialize. Ensure you are using HTTPS and a valid App ID.");
-    return;
-  }
+      if (!window.FB || !AppState.fbInitialized) {
+        alert("Meta SDK is still loading or failed to initialize. Ensure you are using HTTPS and a valid App ID.");
+        return;
+      }
 
-  FB.login(function(response) {
-    if (response.authResponse) {
-      fetchMetaUserData(response.authResponse.accessToken);
+      FB.login(function(response) {
+        if (response.authResponse) {
+          fetchMetaUserData(response.authResponse.accessToken);
+        }
+      }, { scope: 'public_profile' });
     }
-  }, { scope: 'public_profile' });
-}
+
     class DiscordApp extends HTMLElement {
       connectedCallback() {
         this.render();
         this.initSocket();
+        handleDiscordOAuthRedirect();
 
         window.addEventListener("nickname-updated", () => this.handleNicknameChange());
         window.addEventListener("channel-switch", (e) => this.switchChannel(e.detail.channelId));
       }
 
       initSocket() {
-
-        const backendUrl = `http://${window.location.hostname}:3042`;
+        const backendUrl = `https://d98a-2600-1700-6828-51c0-9890-9dc4-2df3-f2e0.ngrok-free.app/` || `http://${window.location.hostname}:3042`;
         AppState.socket = io(backendUrl, {
           transports: ['websocket', 'polling'],
           reconnectionAttempts: 15,
@@ -151,7 +201,6 @@
           if (!AppState.messages[msg.channelId]) {
             AppState.messages[msg.channelId] = [];
           }
-          // simple de-dupe by id
           if (!AppState.messages[msg.channelId].some(m => m.id === msg.id)) {
             AppState.messages[msg.channelId].push(msg);
           }
@@ -169,7 +218,6 @@
         AppState.categoryName = data.categoryName || "DISCORD CATEGORY";
         AppState.channels = data.channels || [];
 
-        // If current channel disappeared, reset
         if (AppState.activeChannelId &&
             !AppState.channels.some(c => c.id === AppState.activeChannelId)) {
           AppState.activeChannelId = AppState.channels[0]?.id || null;
@@ -258,7 +306,12 @@
         const avatarSrc = AppState.avatarUrl ||
           `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(AppState.nickname || 'User')}`;
 
-        const isMeta = !!AppState.metaToken && !!AppState.nickname;
+        const isAuth = !!AppState.authProvider && !!AppState.nickname;
+        const badgeText = AppState.authProvider === 'discord'
+          ? 'Discord Verified'
+          : AppState.authProvider === 'meta'
+          ? 'Meta / IG Verified'
+          : 'Guest';
 
         this.innerHTML = `
           <div class="h-12 px-4 border-b border-[#202225] shadow-sm flex items-center justify-between bg-[#2f3136]">
@@ -277,9 +330,9 @@
               <img src="${avatarSrc}" class="w-8 h-8 rounded-full bg-gray-700 flex-shrink-0 object-cover" alt="Avatar" />
               <div class="flex flex-col min-w-0">
                 <span class="font-bold text-white truncate text-xs">${this.escape(AppState.nickname || 'Guest')}</span>
-                <span class="text-[10px] ${isMeta ? 'text-emerald-400' : 'text-gray-500'} truncate flex items-center gap-1">
-                  <span class="w-1.5 h-1.5 rounded-full ${isMeta ? 'bg-emerald-400' : 'bg-gray-500'}"></span>
-                  ${isMeta ? 'Meta Verified' : 'Guest'}
+                <span class="text-[10px] ${isAuth ? 'text-emerald-400' : 'text-gray-500'} truncate flex items-center gap-1">
+                  <span class="w-1.5 h-1.5 rounded-full ${isAuth ? 'bg-emerald-400' : 'bg-gray-500'}"></span>
+                  ${badgeText}
                 </span>
               </div>
             </div>
@@ -359,7 +412,6 @@
           `;
         }).join('');
 
-        // Keep scroll at bottom
         requestAnimationFrame(() => {
           container.scrollTop = container.scrollHeight;
         });
@@ -394,7 +446,6 @@
         if (AppState.socket?.connected) {
           AppState.socket.emit("send_message", payload);
         } else {
-          // Offline fallback (local only)
           if (!AppState.messages[AppState.activeChannelId]) {
             AppState.messages[AppState.activeChannelId] = [];
           }
@@ -515,18 +566,30 @@
             <div class="bg-[#36393f] w-full max-w-sm rounded-lg shadow-2xl border border-gray-700 overflow-hidden text-center p-6 space-y-5">
               <div class="space-y-1">
                 <h3 class="text-xl font-bold text-white">Welcome to Relay</h3>
-                <p class="text-xs text-gray-400">Log in with Meta to send messages using your verified name and avatar.</p>
+                <p class="text-xs text-gray-400">Log in with Discord or Instagram/Meta to send messages with your profile.</p>
               </div>
 
-              <button
-                onclick="loginWithMeta()"
-                class="w-full bg-[#1877F2] hover:bg-[#166fe5] text-white font-semibold py-2.5 px-4 rounded transition-colors flex items-center justify-center gap-2 shadow-md"
-              >
-                <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24">
-                  <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-                </svg>
-                <span>Continue with Meta</span>
-              </button>
+              <div class="space-y-3">
+                <button
+                  onclick="loginWithDiscord()"
+                  class="w-full bg-[#5865F2] hover:bg-[#4752C4] text-white font-semibold py-2.5 px-4 rounded transition-colors flex items-center justify-center gap-2 shadow-md"
+                >
+                  <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24">
+                    <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994.021-.041.001-.09-.041-.106a13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.061 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.893.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+                  </svg>
+                  <span>Continue with Discord</span>
+                </button>
+
+                <button
+                  onclick="loginWithMeta()"
+                  class="w-full bg-[#1877F2] hover:bg-[#166fe5] text-white font-semibold py-2.5 px-4 rounded transition-colors flex items-center justify-center gap-2 shadow-md"
+                >
+                  <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24">
+                    <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                  </svg>
+                  <span>Continue with Instagram / Meta</span>
+                </button>
+              </div>
 
               ${!isMandatory ? `
                 <button
